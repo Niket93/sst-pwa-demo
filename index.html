@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Dictée — offline speech to text</title>
+<meta name="description" content="On-device English & French transcription. No audio leaves your machine." />
+<meta name="theme-color" content="#0F1417" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0F1417;
+    --surface: #182024;
+    --line: #243036;
+    --ink: #EDE8DF;
+    --muted: #8A958F;
+    --rec: #FF4B3A;
+    --wave: #5BC8B0;
+    --sans: "Bricolage Grotesque", system-ui, sans-serif;
+    --serif: "Newsreader", Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    flex-shrink: 0;
+  }
+  .wordmark { display: flex; align-items: baseline; gap: 10px; }
+  .wordmark h1 {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .wordmark .accent { color: var(--rec); }
+  .wordmark span.tag {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .langs { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; padding: 3px; }
+  .langs button {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    background: none;
+    border: none;
+    border-radius: 99px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .langs button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  .langs button:focus-visible { outline: 2px solid var(--wave); outline-offset: 1px; }
+
+  /* ---------- stage ---------- */
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+    position: relative;
+    min-height: 0;
+  }
+  .stage { position: relative; width: 300px; height: 300px; display: grid; place-items: center; }
+  canvas#ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  button#mic {
+    position: relative;
+    width: 104px;
+    height: 104px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: transform .15s ease, background .25s ease, border-color .25s ease, box-shadow .25s ease;
+  }
+  button#mic:hover { transform: scale(1.04); }
+  button#mic:active { transform: scale(0.97); }
+  button#mic:focus-visible { outline: 2px solid var(--wave); outline-offset: 4px; }
+  button#mic svg { width: 36px; height: 36px; transition: color .25s; }
+  button#mic[data-state="recording"] {
+    background: var(--rec);
+    border-color: var(--rec);
+    box-shadow: 0 0 44px rgba(255, 75, 58, 0.35);
+    color: #fff;
+  }
+  button#mic:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+  .status {
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 18px;
+  }
+  .status .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .status[data-mode="recording"] { color: var(--rec); }
+  .status[data-mode="recording"] .dot { background: var(--rec); animation: blink 1.1s steps(2) infinite; }
+  .status[data-mode="busy"] .dot { background: var(--wave); animation: blink 0.8s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+  @media (prefers-reduced-motion: reduce) {
+    .status .dot { animation: none !important; }
+    button#mic, button#mic:hover { transition: none; transform: none; }
+  }
+
+  /* model loading */
+  .loader { width: 230px; text-align: center; display: grid; gap: 12px; }
+  .loader p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .bar { height: 3px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: var(--wave); border-radius: 99px; transition: width .2s; }
+  .hidden { display: none !important; }
+
+  /* ---------- transcript ---------- */
+  section#script {
+    flex-shrink: 0;
+    max-height: 34dvh;
+    overflow-y: auto;
+    padding: 12px 24px calc(28px + env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+    mask-image: linear-gradient(to bottom, transparent, black 28px);
+  }
+  #script .line {
+    font-family: var(--serif);
+    font-size: clamp(22px, 3.4vw, 30px);
+    font-weight: 400;
+    line-height: 1.35;
+    text-align: center;
+    max-width: 760px;
+    margin-inline: auto;
+    color: var(--muted);
+    transition: color .4s;
+  }
+  #script .line:last-child { color: var(--ink); }
+  #script .line.enter { animation: rise .45s ease both; }
+  @media (prefers-reduced-motion: reduce) { #script .line.enter { animation: none; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  #script .placeholder {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: clamp(20px, 3vw, 26px);
+    color: var(--muted);
+    opacity: 0.55;
+    text-align: center;
+  }
+  .error {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--rec);
+    text-align: center;
+    max-width: 480px;
+    margin-inline: auto;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark">
+    <h1>Dictée<span class="accent">.</span></h1>
+    <span class="tag">on-device · en + fr</span>
+  </div>
+  <div class="langs" role="group" aria-label="Transcription language">
+    <button data-lang="" aria-pressed="true">Auto</button>
+    <button data-lang="english" aria-pressed="false">EN</button>
+    <button data-lang="french" aria-pressed="false">FR</button>
+  </div>
+</header>
+
+<main>
+  <div class="loader" id="loader">
+    <p id="loaderText">Downloading whisper-base (~80 MB).<br/>One-time only — it's cached for offline use.</p>
+    <div class="bar"><i id="loaderBar"></i></div>
+  </div>
+
+  <div class="stage hidden" id="stage">
+    <canvas id="ring" width="600" height="600" aria-hidden="true"></canvas>
+    <button id="mic" data-state="idle" aria-label="Start recording">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="2.5" width="6" height="12" rx="3"></rect>
+        <path d="M5 11a7 7 0 0 0 14 0"></path>
+        <line x1="12" y1="18" x2="12" y2="21.5"></line>
+      </svg>
+    </button>
+  </div>
+
+  <div class="status hidden" id="status" data-mode="idle">
+    <span class="dot"></span><span id="statusText">Tap to speak</span>
+  </div>
+</main>
+
+<section id="script" aria-live="polite" aria-label="Transcript">
+  <p class="placeholder" id="placeholder">…your words will appear here / vos mots apparaîtront ici</p>
+</section>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2";
+
+const $ = (id) => document.getElementById(id);
+const micBtn = $("mic"), statusEl = $("status"), statusText = $("statusText");
+const loader = $("loader"), loaderBar = $("loaderBar"), loaderText = $("loaderText");
+const stage = $("stage"), script = $("script"), placeholder = $("placeholder");
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let transcriber = null;
+let language = "";            // "" = auto-detect
+let recording = false;
+let mediaRecorder, chunks = [], stream, analyser, audioCtx, rafId, startedAt, timerId;
+
+/* ---------- language toggle ---------- */
+document.querySelectorAll(".langs button").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".langs button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+    b.setAttribute("aria-pressed", "true");
+    language = b.dataset.lang;
+  });
+});
+
+/* ---------- status helpers ---------- */
+function setStatus(mode, text) {
+  statusEl.dataset.mode = mode;
+  statusText.textContent = text;
+}
+function showError(msg) {
+  const p = document.createElement("p");
+  p.className = "error";
+  p.textContent = msg;
+  script.appendChild(p);
+  script.scrollTop = script.scrollHeight;
+}
+
+/* ---------- model loading ---------- */
+async function loadModel() {
+  const progress = {};
+  const onProgress = (info) => {
+    if (info.status === "progress" && info.total) {
+      progress[info.file] = { loaded: info.loaded, total: info.total };
+      let loaded = 0, total = 0;
+      for (const f of Object.values(progress)) { loaded += f.loaded; total += f.total; }
+      loaderBar.style.width = `${Math.min(100, (loaded / total) * 100)}%`;
+    }
+  };
+  const model = "onnx-community/whisper-base";
+  try {
+    transcriber = await pipeline("automatic-speech-recognition", model, {
+      device: "webgpu",
+      dtype: { encoder_model: "fp32", decoder_model_merged: "q4" },
+      progress_callback: onProgress,
+    });
+  } catch (e) {
+    console.warn("WebGPU unavailable, falling back to WASM:", e);
+    loaderText.innerHTML = "WebGPU unavailable — loading WASM build instead…";
+    transcriber = await pipeline("automatic-speech-recognition", model, {
+      dtype: "q8",
+      progress_callback: onProgress,
+    });
+  }
+  loader.classList.add("hidden");
+  stage.classList.remove("hidden");
+  statusEl.classList.remove("hidden");
+  setStatus("idle", "Tap to speak");
+  drawIdleRing();
+}
+
+/* ---------- recording ---------- */
+micBtn.addEventListener("click", () => (recording ? stopRecording() : startRecording()));
+
+async function startRecording() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    showError("Microphone access was blocked. Allow the microphone for this site in your browser settings, then try again.");
+    return;
+  }
+  chunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mediaRecorder.onstop = handleStop;
+  mediaRecorder.start();
+
+  audioCtx = new AudioContext();
+  const src = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  src.connect(analyser);
+
+  recording = true;
+  startedAt = Date.now();
+  micBtn.dataset.state = "recording";
+  micBtn.setAttribute("aria-label", "Stop recording");
+  tickTimer();
+  timerId = setInterval(tickTimer, 250);
+  if (!reducedMotion) drawLiveRing();
+}
+
+function tickTimer() {
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  setStatus("recording", `Recording ${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")} — tap to stop`);
+}
+
+function stopRecording() {
+  recording = false;
+  clearInterval(timerId);
+  cancelAnimationFrame(rafId);
+  mediaRecorder.stop();
+  stream.getTracks().forEach((t) => t.stop());
+  micBtn.dataset.state = "idle";
+  micBtn.setAttribute("aria-label", "Start recording");
+  micBtn.disabled = true;
+  setStatus("busy", "Transcribing…");
+  drawIdleRing();
+}
+
+async function handleStop() {
+  try {
+    const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
+    const audio = await blobTo16kMono(blob);
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    if (audio.length < 1600) { // <0.1s of audio
+      setStatus("idle", "Tap to speak");
+      micBtn.disabled = false;
+      return;
+    }
+    const opts = { task: "transcribe", chunk_length_s: 30 };
+    if (language) opts.language = language;
+    const result = await transcriber(audio, opts);
+    const text = (result.text || "").trim();
+    if (text) addLine(text);
+    setStatus("idle", "Tap to speak");
+  } catch (err) {
+    console.error(err);
+    showError("Transcription failed — see the console for details. Try recording again.");
+    setStatus("idle", "Tap to speak");
+  } finally {
+    micBtn.disabled = false;
+  }
+}
+
+/* Decode any recorded blob to 16 kHz mono Float32 (Whisper's expected input). */
+async function blobTo16kMono(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  let buf;
+  try {
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    buf = await ctx.decodeAudioData(arrayBuffer);
+    ctx.close();
+  } catch {
+    // Fallback: decode at native rate, then resample offline
+    const ctx = new AudioContext();
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
+    ctx.close();
+    const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+    const node = off.createBufferSource();
+    node.buffer = decoded;
+    node.connect(off.destination);
+    node.start();
+    buf = await off.startRendering();
+  }
+  if (buf.numberOfChannels === 1) return buf.getChannelData(0);
+  const a = buf.getChannelData(0), b = buf.getChannelData(1);
+  const mono = new Float32Array(buf.length);
+  for (let i = 0; i < buf.length; i++) mono[i] = (a[i] + b[i]) / 2;
+  return mono;
+}
+
+/* ---------- transcript ---------- */
+function addLine(text) {
+  placeholder?.remove();
+  const p = document.createElement("p");
+  p.className = "line enter";
+  p.textContent = text;
+  script.appendChild(p);
+  script.scrollTop = script.scrollHeight;
+}
+
+/* ---------- waveform ring ---------- */
+const ring = $("ring"), ctx2d = ring.getContext("2d");
+const BARS = 56, R = 200, CX = 300, CY = 300;
+
+function drawIdleRing() {
+  ctx2d.clearRect(0, 0, 600, 600);
+  ctx2d.strokeStyle = "rgba(91, 200, 176, 0.22)";
+  ctx2d.lineWidth = 2;
+  for (let i = 0; i < BARS; i++) {
+    const ang = (i / BARS) * Math.PI * 2;
+    bar(ang, 6);
+  }
+}
+function drawLiveRing() {
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const frame = () => {
+    if (!recording) return;
+    analyser.getByteFrequencyData(data);
+    ctx2d.clearRect(0, 0, 600, 600);
+    ctx2d.lineWidth = 3;
+    for (let i = 0; i < BARS; i++) {
+      const v = data[Math.floor((i / BARS) * data.length * 0.7)] / 255;
+      const len = 6 + v * 52;
+      const ang = (i / BARS) * Math.PI * 2 - Math.PI / 2;
+      ctx2d.strokeStyle = `rgba(255, 75, 58, ${0.35 + v * 0.65})`;
+      bar(ang, len);
+    }
+    rafId = requestAnimationFrame(frame);
+  };
+  frame();
+}
+function bar(ang, len) {
+  ctx2d.beginPath();
+  ctx2d.moveTo(CX + Math.cos(ang) * R, CY + Math.sin(ang) * R);
+  ctx2d.lineTo(CX + Math.cos(ang) * (R + len), CY + Math.sin(ang) * (R + len));
+  ctx2d.stroke();
+}
+
+/* ---------- PWA service worker ---------- */
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+loadModel().catch((e) => {
+  console.error(e);
+  loaderText.textContent = "Couldn't download the model. Check your connection (first load needs internet) and reload.";
+});
+</script>
+</body>
+</html>

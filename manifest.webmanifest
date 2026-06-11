@@ -1,0 +1,13 @@
+{
+  "name": "Dictée — offline speech to text",
+  "short_name": "Dictée",
+  "description": "On-device English & French transcription. No audio leaves your machine.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0F1417",
+  "theme_color": "#0F1417",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
